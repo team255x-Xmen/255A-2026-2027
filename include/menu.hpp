@@ -30,6 +30,7 @@ static const int BLUE = 0x0000FF; //Abbreviates blue to its hexadecimal number
 static const int RED = 0xFF0000; //Abbreviates red to its hexadecimal number
 static const int YELLOW = 0xFFFF00; //Abbreviates yellow to its hexadecimal number
 static const int WHITE = 0xFFFFFF; //Abbreviates white to its hexadecimal number
+static const int TRANSPARENT = 0xFFFFFF00; //The transparent color (extra 00 at start to set a to 0)
 //This makes it easier to read later
 
 using namespace std; //std namespace is used
@@ -189,6 +190,7 @@ class utilAutons : public brainSpacing { //Class that holds utility autons. Pare
 };
 
 extern bool selectedIsBlue;
+extern ez::Drive chassis; //The chassis for the bot
 
 /*
  * This class does everything for the autonomous selector
@@ -202,9 +204,10 @@ extern bool selectedIsBlue;
 class AutonManager {
     public:
 
-    template <typename... inputAutonTypes> //Template for the input autos (... allows for multiple types)
-    void addAutons(inputAutonTypes... inputAutons) { //I want to take the multiple types
-
+    //Template for the input autos (... allows for unspecified input size)
+    template <typename... inputAutonTypes> //Allows for any amount of different autons to be placed into manager.
+    void addAutons(inputAutonTypes... inputAutons) { //Function to add any autons or utilAutons class objects
+        //I want to take the multiple types
         auto sendToVectors = [this] (auto inputAutonomous) { //Lambda to route the input autons to their vectors
             using T = std::decay_t<decltype(inputAutonomous)>; //Gets the type of the current auton
 
@@ -265,6 +268,12 @@ class AutonManager {
     }
 
     void screenTouched(int x, int y) { //Checks everything for touch identification, then redraws screen
+
+        if (utilities[3].containsPoint(x, y)) {
+            autonomous();
+            return;
+        }
+
         for (auto &u : utilities) { //Checks utilities
             if (u.containsPoint(x, y)) setID(u.getID()); //Updates ID if it should
         }
@@ -401,11 +410,12 @@ class AutonManager {
         instance = this; //Initializes the instance pointer to this
         setupRecog = this;
 
-        for (int i = 1; i <= 3; ++i) { //Creates the utility sections. Can add more by adjusting numbers
+        for (int i = 1; i <= 4; ++i) { //Creates the utility sections. Can add more by adjusting numbers
             string name = ""; //Empty string for the name
             if (i == 1) name = "Blue"; //Blue has ID of 1
             if (i == 2) name = "Red"; //Red has ID of 2
             if (i == 3) name = "Utility"; //Utility has ID of 3
+            if (i == 4) name = "Run Auto"; //A run auto button
             utilities.push_back(ManagerUtil(name, i)); //Adds them to utility
         }
 
@@ -423,6 +433,7 @@ class AutonManager {
         terminated = false; //Resets termination check
         setupScreenRecognition(); //Sets up screen recognition
         pros::Task newTask(touchRecog);
+        pros::Task screenTask(screenStatic);
     }
 
     static inline AutonManager *setupRecog = nullptr;
@@ -551,7 +562,7 @@ class AutonManager {
     int setPosition(int pixel, int totalObjects, autons& currentAuto, int verticalPixel, utilAutons& utilAuto, bool usingUtil, int availableYPixels, int vertRows) { //Sets the input member's position
         pixel += 4; //Adds 4 for starting offset
         int leftBound = pixel; //What the left bound is
-        int horizontalDistance = (480 - (totalObjects * 8)) / totalObjects; //*8 is for spacing, then divide for the slide
+        int horizontalDistance = ((480 - (totalObjects * 8)) / totalObjects) / 2; //*8 is for spacing, then divide for the slide
         pixel += horizontalDistance; //Moves to the right edge
         int rightBound = pixel; //Right bound is now the current pixel
         pixel += 4; //Moves it right 4 again
@@ -601,6 +612,7 @@ class AutonManager {
             for (auto &u : utilAutos) { //Goes through every utility Auton
                 textColor = WHITE; //Sets the text color to black
                 color = u.isSelected() ? YELLOW : WHITE; //And the background to yellow if selected and white otherwise
+                pros::screen::set_eraser(BLACK);
                 u.drawBox(); //Then it draws the auton
             }
             //All screens auto-fill in any available space,
@@ -628,6 +640,7 @@ class AutonManager {
                 if (screenID == 2) textColor = RED; //If the screen is red, set text to red
             
                 color = a.isSelected() ? YELLOW : BLACK; //Sets background color to yellow if selected, black if not
+                pros::screen::set_eraser(BLACK);
                 a.drawBox(); //Draws the auton
             }
         }
@@ -639,6 +652,7 @@ class AutonManager {
             if (u.getID() == 2) textColor = RED; //If red, set text to red
             if (u.getID() == 3) textColor = WHITE; //If utility, set text to white
             color = WHITE; //Background color is white
+            pros::screen::set_eraser(BLACK);
             u.drawBox(); //Draws the utility box
         } //They get drawn once
     }
@@ -797,10 +811,64 @@ class AutonManager {
         int timeElapsed = 0;
         double milliseconds = (minutes * 60 * 100);
         while (timeElapsed < milliseconds&&!terminated) {
-            timeElapsed += 1000;
-            pros::delay(1000);
+            timeElapsed += 10000;
+            pros::delay(10000);
         }
         if (!terminated) {pros::Task rerunSetup(setup);} //If terminated prevent infinite loop
+    }
+
+    static void screenStatic() { //The static function to run the background task loop
+        if (instance) instance->backgroundTask();
+    }
+
+    static void backgroundTask() { //The background task to print xyt to screen
+        double prevX = chassis.odom_x_get(); //Sets the previous x to current
+        double prevY = chassis.odom_y_get(); //Sets the previous y to current
+        double prevT = chassis.odom_theta_get(); //Sets previous theta to current
+        int delayTime; //The delay time to change how long the loop is
+
+        while (true) { //While the program is running
+
+            delayTime = 80; //Delay is 80 milliseconds by default
+
+            if (chassis.odom_x_get() > prevX + 0.25||chassis.odom_x_get() < prevX - 0.25) { //If out of tolerance
+                pros::screen::set_pen(WHITE); //Set pen to white
+                pros::screen::set_eraser(TRANSPARENT); //Set to transparent white
+                pros::screen::print(pros::E_TEXT_MEDIUM, 260, 60, "X: %-10f", chassis.odom_x_get()); //Updates screen
+                delayTime = 20; //Resfresh to next loop faster
+                prevX = chassis.odom_x_get(); //Updates the previous x so it can detect next change
+            }
+
+            if (chassis.odom_y_get() > prevY + 0.25||chassis.odom_y_get() < prevY - 0.25) { //Out of tolerance
+                pros::screen::set_pen(WHITE); //Set pen to white
+                pros::screen::set_eraser(TRANSPARENT); //Set to transparent white
+                pros::screen::print(pros::E_TEXT_MEDIUM, 260, 120, "Y: %-10f", chassis.odom_y_get()); //Update screen
+                delayTime = 20; //Increase delay
+                prevY = chassis.odom_y_get(); //Updates the previous y
+            }
+
+            if (chassis.odom_theta_get() > prevT + 0.25||chassis.odom_theta_get() < prevT - 0.25) { //Tolerance check
+                pros::screen::set_pen(WHITE); //Set pen to white
+                pros::screen::set_eraser(TRANSPARENT); //Set to transparent white
+                pros::screen::print(pros::E_TEXT_MEDIUM, 260, 180, "Theta: %-10f", chassis.odom_theta_get()); //Update the screen
+                delayTime = 20; //Increase delay
+                prevT = chassis.odom_theta_get(); //Updates the previous theta
+            }
+
+            if (!chassis.drive_imu_calibrated()) break;
+
+            pros::delay(delayTime); //Delay to save resources
+        }
+
+        while (true) {
+            pros::screen::set_pen(WHITE); //Set pen to white
+            pros::screen::set_eraser(TRANSPARENT); //Set to transparent white
+            pros::screen::print(pros::E_TEXT_MEDIUM, 260, 60, "X: N/A"); //Updates screen
+            pros::screen::print(pros::E_TEXT_MEDIUM, 260, 120, "Y: N/A"); //Update screen
+            pros::screen::print(pros::E_TEXT_MEDIUM, 260, 180, "Theta: N/A"); //Update the screen
+
+            pros::delay(120);
+        }
     }
 };
 
